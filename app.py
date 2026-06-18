@@ -43,7 +43,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.title("組子寸法ツール")
+st.title("KAKUASA")
 st.caption("三組手・麻の葉｜BC連続部材 + 葉A差し込み方式")
 
 
