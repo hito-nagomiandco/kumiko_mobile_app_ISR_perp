@@ -55,23 +55,28 @@ class KumikoParams:
 
 def setup_japanese_font() -> None:
     """
-    日本語フォント設定。
-    macOSの一部フォントパスには日本語ファイル名が含まれ、
-    環境によっては ascii codec エラーになることがあるため、
-    ここではASCIIファイル名の候補だけを使う。
-    見つからない場合も描画自体は続行する。
+    Streamlit Cloud / Linux / macOS / Windows で日本語が文字化けしにくいようにする。
+    Streamlit Cloudでは packages.txt に fonts-noto-cjk を追加すること。
     """
+    import matplotlib.pyplot as plt
+    import matplotlib.font_manager as fm
+    from pathlib import Path
+
     plt.rcParams["axes.unicode_minus"] = False
     plt.rcParams["pdf.fonttype"] = 42
     plt.rcParams["ps.fonttype"] = 42
 
     candidates = [
+        # Streamlit Cloud / Debian Linux
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
         "/usr/share/fonts/opentype/noto/NotoSansCJKjp-Regular.otf",
         "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-        "/Library/Fonts/Arial Unicode.ttf",
+
+        # macOS
         "/System/Library/Fonts/AppleGothic.ttf",
-        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+        "/Library/Fonts/Arial Unicode.ttf",
+
+        # Windows
         "C:/Windows/Fonts/YuGothR.ttc",
         "C:/Windows/Fonts/YuGothM.ttc",
         "C:/Windows/Fonts/msgothic.ttc",
@@ -82,12 +87,11 @@ def setup_japanese_font() -> None:
             path = Path(font_path)
             if path.exists():
                 fm.fontManager.addfont(str(path))
-                plt.rcParams["font.family"] = fm.FontProperties(fname=str(path)).get_name()
+                font_name = fm.FontProperties(fname=str(path)).get_name()
+                plt.rcParams["font.family"] = font_name
                 return
         except Exception:
-            # フォント設定で失敗しても、計算と図の生成は止めない
             continue
-
 
 
 # ============================================================
