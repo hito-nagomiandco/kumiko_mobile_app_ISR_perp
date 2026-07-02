@@ -1,135 +1,205 @@
-# app.py
-# -*- coding: utf-8 -*-
-
+import uuid
 from pathlib import Path
-import tempfile
 
 import streamlit as st
 
-from shoji_panel_calculator import ShojiParams, calculate_shoji, save_outputs
+from kumiko_asanoha_dimension_calculator import (
+    KumikoParams,
+    build_model,
+    make_coords_df,
+    make_dims_df,
+    plot_sheet,
+)
 
 
-st.set_page_config(page_title="障子ピッチツール", page_icon="▦", layout="wide")
+st.set_page_config(
+    page_title="組子寸法ツール",
+    page_icon="△",
+    layout="centered",
+    initial_sidebar_state="collapsed",
+)
 
-st.title("障子ピッチツール")
-st.caption("密度変化のある障子割付と、施工用の片面座標を作成します。")
+st.markdown(
+    """
+    <style>
+    .block-container {
+        padding-top: 1.0rem;
+        padding-left: 1.0rem;
+        padding-right: 1.0rem;
+        max-width: 720px;
+    }
+    div.stButton > button,
+    div.stDownloadButton > button {
+        width: 100%;
+        min-height: 3.0rem;
+        border-radius: 0.75rem;
+        font-size: 1.05rem;
+    }
+    [data-testid="stMetricValue"] {
+        font-size: 1.35rem;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
-with st.sidebar:
-    st.header("基本寸法")
-    panel_width = st.number_input("有効幅 [mm]", min_value=100.0, max_value=10000.0, value=1000.0, step=10.0)
-    panel_height = st.number_input("パネル高さ [mm]", min_value=100.0, max_value=10000.0, value=600.0, step=10.0)
-    bar_width = st.number_input("組子幅・見付 [mm]", min_value=1.0, max_value=100.0, value=5.0, step=0.5)
-    bar_thickness = st.number_input("組子厚み [mm]", min_value=1.0, max_value=100.0, value=12.0, step=0.5)
-    bar_count = st.number_input("組子本数", min_value=1, max_value=200, value=20, step=1)
+st.title("組子寸法ツール")
+st.caption("三組手・麻の葉｜BC連続部材 + 葉A差し込み方式")
 
-    st.divider()
-    st.header("密度変化")
-    max_gap = st.number_input("最大隙間・疎側 [mm]", min_value=1.0, max_value=1000.0, value=150.0, step=1.0)
-    min_gap = st.number_input("最小隙間・密側 [mm]", min_value=0.5, max_value=500.0, value=12.0, step=0.5)
 
-    curve_type_label = st.selectbox(
-        "曲線タイプ",
-        options=["余弦 cosine", "べき乗 power", "指数 exponential", "直線 linear"],
-        index=0,
+preset = st.selectbox(
+    "プリセット",
+    [
+        "E=59 / 親桟4 / 葉桟4",
+        "E=63 / 親桟4 / 葉桟4",
+        "カスタム",
+    ],
+)
+
+if preset == "E=59 / 親桟4 / 葉桟4":
+    default_basis = "effective"
+    default_side = 59.0
+    default_base = 4.0
+    default_leaf = 4.0
+elif preset == "E=63 / 親桟4 / 葉桟4":
+    default_basis = "effective"
+    default_side = 63.0
+    default_base = 4.0
+    default_leaf = 4.0
+else:
+    default_basis = "effective"
+    default_side = 59.0
+    default_base = 4.0
+    default_leaf = 4.0
+
+
+with st.form("kumiko_form"):
+    basis_label = st.radio(
+        "入力基準",
+        ["有効三角形 E", "三組手中心線 S"],
+        index=0 if default_basis == "effective" else 1,
+        horizontal=True,
     )
-    curve_type = {
-        "余弦 cosine": "cosine",
-        "べき乗 power": "power",
-        "指数 exponential": "exponential",
-        "直線 linear": "linear",
-    }[curve_type_label]
 
-    direction_label = st.selectbox("密になる方向", options=["右に向かって密", "左に向かって密"], index=0)
-    direction = "right_dense" if direction_label == "右に向かって密" else "left_dense"
-
-    change_position = st.slider(
-        "変化位置",
-        min_value=0.05,
-        max_value=0.95,
-        value=0.35,
-        step=0.01,
-        help="0.5が中央。0.35なら疎側寄りに変化が出ます。",
+    side = st.number_input(
+        "三角形の一辺 [mm]",
+        min_value=1.0,
+        max_value=1000.0,
+        value=float(default_side),
+        step=0.1,
+        format="%.2f",
     )
-    sparse_motion = st.slider(
-        "疎側の動き",
+
+    base_width = st.number_input(
+        "親桟太さ [mm]",
+        min_value=0.1,
+        max_value=200.0,
+        value=float(default_base),
+        step=0.1,
+        format="%.2f",
+    )
+
+    leaf_width = st.number_input(
+        "葉桟太さ [mm]",
+        min_value=0.1,
+        max_value=200.0,
+        value=float(default_leaf),
+        step=0.1,
+        format="%.2f",
+    )
+
+    clearance = st.number_input(
+        "クリアランス [mm]",
         min_value=0.0,
-        max_value=100.0,
-        value=70.0,
-        step=1.0,
-        help="値を大きくすると、疎側から早めに変化が出ます。",
+        max_value=10.0,
+        value=0.10,
+        step=0.05,
+        format="%.2f",
     )
 
-    st.divider()
-    st.header("加工設定")
-    round_unit = st.selectbox("丸め単位 [mm]", options=[0.1, 0.5, 1.0, 2.0, 5.0], index=1)
-    generate = st.button("計算する", type="primary")
+    make_pdf = st.checkbox("PDFも生成する", value=False)
 
-if not generate:
-    st.info("左のパラメータを設定して「計算する」を押してください。")
-    st.stop()
+    submitted = st.form_submit_button("寸法図を生成")
 
-try:
-    params = ShojiParams(
-        panel_width=panel_width,
-        panel_height=panel_height,
-        bar_width=bar_width,
-        bar_thickness=bar_thickness,
-        bar_count=int(bar_count),
-        max_gap=max_gap,
-        min_gap=min_gap,
-        change_position=change_position,
-        sparse_motion=sparse_motion,
-        curve_type=curve_type,
-        direction=direction,
-        round_unit=float(round_unit),
+
+if submitted:
+    basis = "effective" if basis_label == "有効三角形 E" else "centerline"
+
+    params = KumikoParams(
+        input_basis=basis,
+        input_side=float(side),
+        base_bar_width=float(base_width),
+        leaf_bar_width=float(leaf_width),
+        clearance=float(clearance),
+        out_dir="output",
     )
-    result = calculate_shoji(params)
-except Exception as e:
-    st.error(f"計算エラー: {e}")
-    st.stop()
 
-with tempfile.TemporaryDirectory() as tmpdir:
-    paths = save_outputs(result, tmpdir)
-    summary = result.summary.iloc[0]
+    try:
+        model = build_model(params)
+    except ValueError as e:
+        st.error("この寸法条件では形状が成立しません。")
+        st.warning(str(e))
+        st.caption("三角形が小さすぎる、または桟が太すぎる可能性があります。")
+        st.stop()
+    except Exception as e:
+        st.error("寸法計算中にエラーが出ました。")
+        st.code(repr(e))
+        st.stop()
 
-    col1, col2, col3, col4 = st.columns(4)
+    try:
+        output_dir = Path("output")
+        output_dir.mkdir(exist_ok=True)
+
+        run_id = uuid.uuid4().hex[:8]
+        tag = f"{basis}_side{side:g}_base{base_width:g}_leaf{leaf_width:g}_{run_id}"
+
+        png_path = output_dir / f"kumiko_asanoha_{tag}_sheet.png"
+        pdf_path = output_dir / f"kumiko_asanoha_{tag}_sheet.pdf" if make_pdf else None
+        coords_csv_path = output_dir / f"kumiko_asanoha_{tag}_coords.csv"
+        dims_csv_path = output_dir / f"kumiko_asanoha_{tag}_dims.csv"
+
+        # PNGをまず確実に生成。PDFは必要なときだけ生成。
+        plot_sheet(model, png_path, pdf_path)
+
+        coords_df = make_coords_df(model, params.rounding)
+        dims_df = make_dims_df(model, params.rounding)
+
+        coords_df.to_csv(coords_csv_path, index=False, encoding="utf-8-sig")
+        dims_df.to_csv(dims_csv_path, index=False, encoding="utf-8-sig")
+
+    except UnicodeEncodeError as e:
+        st.error("文字コードまたはフォント設定のエラーです。")
+        st.code(str(e))
+        st.caption("PNG生成を優先する修正版を使うか、計算プログラム側の日本語フォント設定を修正してください。")
+        st.stop()
+    except Exception as e:
+        st.error("図の生成中にエラーが出ました。")
+        st.code(repr(e))
+        st.stop()
+
+    st.success("生成できました。")
+
+    col1, col2 = st.columns(2)
     with col1:
-        st.metric("実際の最大隙間", f"{summary['actual_max_gap']:.1f} mm")
+        st.metric("有効三角形 E", f"{model['E']:.2f} mm")
     with col2:
-        st.metric("実際の最小隙間", f"{summary['actual_min_gap']:.1f} mm")
-    with col3:
-        st.metric("隙間合計", f"{summary['actual_gap_total']:.1f} mm")
-    with col4:
-        st.metric("全体幅", f"{summary['actual_total_width']:.1f} mm")
+        st.metric("中心線 S", f"{model['S']:.2f} mm")
 
-    st.subheader("割付図")
-    st.image(str(paths["png"]), use_container_width=True)
+    st.image(str(png_path), caption="生成された寸法図", use_container_width=True)
 
-    st.subheader("寸法表")
-    tab1, tab2, tab3 = st.tabs(["施工用 桟座標", "隙間寸法", "概要"])
+    with st.expander("寸法表を表示"):
+        st.dataframe(dims_df, use_container_width=True, hide_index=True)
 
-    with tab1:
-        st.caption("芯芯ではなく、桟の片面座標を出しています。左端0点・右端0点の両方から確認できます。")
-        st.dataframe(result.bars, use_container_width=True)
+    with st.expander("ダウンロード"):
+        with open(png_path, "rb") as f:
+            st.download_button("PNGを保存", data=f, file_name=png_path.name, mime="image/png")
 
-    with tab2:
-        st.dataframe(result.gaps, use_container_width=True)
+        if pdf_path is not None and pdf_path.exists():
+            with open(pdf_path, "rb") as f:
+                st.download_button("PDFを保存", data=f, file_name=pdf_path.name, mime="application/pdf")
 
-    with tab3:
-        st.dataframe(result.summary, use_container_width=True)
+        with open(dims_csv_path, "rb") as f:
+            st.download_button("寸法CSVを保存", data=f, file_name=dims_csv_path.name, mime="text/csv")
 
-    st.subheader("ダウンロード")
-    col_a, col_b, col_c, col_d = st.columns(4)
-
-    with col_a:
-        with open(paths["png"], "rb") as f:
-            st.download_button("PNG", f, file_name=Path(paths["png"]).name, mime="image/png")
-    with col_b:
-        with open(paths["bar_coordinates_csv"], "rb") as f:
-            st.download_button("施工用 桟座標CSV", f, file_name=Path(paths["bar_coordinates_csv"]).name, mime="text/csv")
-    with col_c:
-        with open(paths["gaps_csv"], "rb") as f:
-            st.download_button("隙間寸法CSV", f, file_name=Path(paths["gaps_csv"]).name, mime="text/csv")
-    with col_d:
-        with open(paths["summary_csv"], "rb") as f:
-            st.download_button("概要CSV", f, file_name=Path(paths["summary_csv"]).name, mime="text/csv")
+        with open(coords_csv_path, "rb") as f:
+            st.download_button("座標CSVを保存", data=f, file_name=coords_csv_path.name, mime="text/csv")
