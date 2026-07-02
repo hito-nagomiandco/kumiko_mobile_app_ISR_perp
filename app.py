@@ -1,14 +1,15 @@
-import uuid
+# app.py
+# -*- coding: utf-8 -*-
+
 from pathlib import Path
+import tempfile
 
 import streamlit as st
 
 from kumiko_asanoha_dimension_calculator import (
     KumikoParams,
-    build_model,
-    make_coords_df,
-    make_dims_df,
-    plot_sheet,
+    calculate_kumiko,
+    save_outputs,
 )
 
 
@@ -16,76 +17,55 @@ st.set_page_config(
     page_title="組子寸法ツール",
     page_icon="△",
     layout="centered",
-    initial_sidebar_state="collapsed",
-)
-
-st.markdown(
-    """
-    <style>
-    .block-container {
-        padding-top: 1.0rem;
-        padding-left: 1.0rem;
-        padding-right: 1.0rem;
-        max-width: 720px;
-    }
-    div.stButton > button,
-    div.stDownloadButton > button {
-        width: 100%;
-        min-height: 3.0rem;
-        border-radius: 0.75rem;
-        font-size: 1.05rem;
-    }
-    [data-testid="stMetricValue"] {
-        font-size: 1.35rem;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
 )
 
 st.title("組子寸法ツール")
 st.caption("三組手・麻の葉｜BC連続部材 + 葉A差し込み方式")
 
+presets = {
+    "E=59 / 親桟4 / 葉桟4": {
+        "input_basis": "effective",
+        "side_value": 59.0,
+        "base_width": 4.0,
+        "leaf_width": 4.0,
+        "clearance": 0.1,
+    },
+    "S=66.27 / 親桟4 / 葉桟4": {
+        "input_basis": "centerline",
+        "side_value": 66.27,
+        "base_width": 4.0,
+        "leaf_width": 4.0,
+        "clearance": 0.1,
+    },
+    "カスタム": {
+        "input_basis": "effective",
+        "side_value": 59.0,
+        "base_width": 4.0,
+        "leaf_width": 4.0,
+        "clearance": 0.1,
+    },
+}
 
-preset = st.selectbox(
-    "プリセット",
-    [
-        "E=59 / 親桟4 / 葉桟4",
-        "E=63 / 親桟4 / 葉桟4",
-        "カスタム",
-    ],
-)
+preset_name = st.selectbox("プリセット", list(presets.keys()), index=0)
+preset = presets[preset_name]
 
-if preset == "E=59 / 親桟4 / 葉桟4":
-    default_basis = "effective"
-    default_side = 59.0
-    default_base = 4.0
-    default_leaf = 4.0
-elif preset == "E=63 / 親桟4 / 葉桟4":
-    default_basis = "effective"
-    default_side = 63.0
-    default_base = 4.0
-    default_leaf = 4.0
-else:
-    default_basis = "effective"
-    default_side = 59.0
-    default_base = 4.0
-    default_leaf = 4.0
+with st.form("params"):
+    st.subheader("入力基準")
 
-
-with st.form("kumiko_form"):
     basis_label = st.radio(
         "入力基準",
         ["有効三角形 E", "三組手中心線 S"],
-        index=0 if default_basis == "effective" else 1,
         horizontal=True,
+        index=0 if preset["input_basis"] == "effective" else 1,
     )
+    input_basis = "effective" if basis_label == "有効三角形 E" else "centerline"
 
-    side = st.number_input(
-        "三角形の一辺 [mm]",
+    side_label = "三角形の一辺 [mm]" if input_basis == "effective" else "三組手中心線三角形の一辺 [mm]"
+    side_value = st.number_input(
+        side_label,
         min_value=1.0,
         max_value=1000.0,
-        value=float(default_side),
+        value=float(preset["side_value"]),
         step=0.1,
         format="%.2f",
     )
@@ -93,8 +73,8 @@ with st.form("kumiko_form"):
     base_width = st.number_input(
         "親桟太さ [mm]",
         min_value=0.1,
-        max_value=200.0,
-        value=float(default_base),
+        max_value=100.0,
+        value=float(preset["base_width"]),
         step=0.1,
         format="%.2f",
     )
@@ -102,8 +82,8 @@ with st.form("kumiko_form"):
     leaf_width = st.number_input(
         "葉桟太さ [mm]",
         min_value=0.1,
-        max_value=200.0,
-        value=float(default_leaf),
+        max_value=100.0,
+        value=float(preset["leaf_width"]),
         step=0.1,
         format="%.2f",
     )
@@ -111,8 +91,8 @@ with st.form("kumiko_form"):
     clearance = st.number_input(
         "クリアランス [mm]",
         min_value=0.0,
-        max_value=10.0,
-        value=0.10,
+        max_value=20.0,
+        value=float(preset["clearance"]),
         step=0.05,
         format="%.2f",
     )
@@ -122,84 +102,66 @@ with st.form("kumiko_form"):
     submitted = st.form_submit_button("寸法図を生成")
 
 
-if submitted:
-    basis = "effective" if basis_label == "有効三角形 E" else "centerline"
+if not submitted:
+    st.info("条件を入力して「寸法図を生成」を押してください。")
+    st.stop()
 
+
+try:
     params = KumikoParams(
-        input_basis=basis,
-        input_side=float(side),
-        base_bar_width=float(base_width),
-        leaf_bar_width=float(leaf_width),
-        clearance=float(clearance),
-        out_dir="output",
+        input_basis=input_basis,
+        side_value=side_value,
+        base_width=base_width,
+        leaf_width=leaf_width,
+        clearance=clearance,
+        make_pdf=make_pdf,
     )
+    result = calculate_kumiko(params)
 
-    try:
-        model = build_model(params)
-    except ValueError as e:
-        st.error("この寸法条件では形状が成立しません。")
-        st.warning(str(e))
-        st.caption("三角形が小さすぎる、または桟が太すぎる可能性があります。")
-        st.stop()
-    except Exception as e:
-        st.error("寸法計算中にエラーが出ました。")
-        st.code(repr(e))
-        st.stop()
+except Exception as e:
+    st.error("この寸法条件では形状が成立しません。")
+    st.warning(str(e))
+    st.stop()
 
-    try:
-        output_dir = Path("output")
-        output_dir.mkdir(exist_ok=True)
 
-        run_id = uuid.uuid4().hex[:8]
-        tag = f"{basis}_side{side:g}_base{base_width:g}_leaf{leaf_width:g}_{run_id}"
-
-        png_path = output_dir / f"kumiko_asanoha_{tag}_sheet.png"
-        pdf_path = output_dir / f"kumiko_asanoha_{tag}_sheet.pdf" if make_pdf else None
-        coords_csv_path = output_dir / f"kumiko_asanoha_{tag}_coords.csv"
-        dims_csv_path = output_dir / f"kumiko_asanoha_{tag}_dims.csv"
-
-        # PNGをまず確実に生成。PDFは必要なときだけ生成。
-        plot_sheet(model, png_path, pdf_path)
-
-        coords_df = make_coords_df(model, params.rounding)
-        dims_df = make_dims_df(model, params.rounding)
-
-        coords_df.to_csv(coords_csv_path, index=False, encoding="utf-8-sig")
-        dims_df.to_csv(dims_csv_path, index=False, encoding="utf-8-sig")
-
-    except UnicodeEncodeError as e:
-        st.error("文字コードまたはフォント設定のエラーです。")
-        st.code(str(e))
-        st.caption("PNG生成を優先する修正版を使うか、計算プログラム側の日本語フォント設定を修正してください。")
-        st.stop()
-    except Exception as e:
-        st.error("図の生成中にエラーが出ました。")
-        st.code(repr(e))
-        st.stop()
-
-    st.success("生成できました。")
+with tempfile.TemporaryDirectory() as tmpdir:
+    paths = save_outputs(result, tmpdir, make_pdf=make_pdf)
 
     col1, col2 = st.columns(2)
     with col1:
-        st.metric("有効三角形 E", f"{model['E']:.2f} mm")
+        st.metric("有効三角形 E", f"{result.effective_side:.2f} mm")
     with col2:
-        st.metric("中心線 S", f"{model['S']:.2f} mm")
+        st.metric("三組手中心線 S", f"{result.centerline_side:.2f} mm")
 
-    st.image(str(png_path), caption="生成された寸法図", use_container_width=True)
+    st.subheader("寸法図")
+    st.image(str(paths["png"]), use_container_width=True)
 
-    with st.expander("寸法表を表示"):
-        st.dataframe(dims_df, use_container_width=True, hide_index=True)
+    st.subheader("寸法表")
+    st.dataframe(result.dimensions, use_container_width=True)
 
-    with st.expander("ダウンロード"):
-        with open(png_path, "rb") as f:
-            st.download_button("PNGを保存", data=f, file_name=png_path.name, mime="image/png")
+    st.subheader("ダウンロード")
 
-        if pdf_path is not None and pdf_path.exists():
-            with open(pdf_path, "rb") as f:
-                st.download_button("PDFを保存", data=f, file_name=pdf_path.name, mime="application/pdf")
+    with open(paths["png"], "rb") as f:
+        st.download_button(
+            "PNGをダウンロード",
+            data=f,
+            file_name=Path(paths["png"]).name,
+            mime="image/png",
+        )
 
-        with open(dims_csv_path, "rb") as f:
-            st.download_button("寸法CSVを保存", data=f, file_name=dims_csv_path.name, mime="text/csv")
+    with open(paths["dims_csv"], "rb") as f:
+        st.download_button(
+            "寸法CSVをダウンロード",
+            data=f,
+            file_name=Path(paths["dims_csv"]).name,
+            mime="text/csv",
+        )
 
-        with open(coords_csv_path, "rb") as f:
-            st.download_button("座標CSVを保存", data=f, file_name=coords_csv_path.name, mime="text/csv")
+    if make_pdf and "pdf" in paths:
+        with open(paths["pdf"], "rb") as f:
+            st.download_button(
+                "PDFをダウンロード",
+                data=f,
+                file_name=Path(paths["pdf"]).name,
+                mime="application/pdf",
+            )

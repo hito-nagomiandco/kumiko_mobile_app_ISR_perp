@@ -1,13 +1,27 @@
-# ISR垂線寸法版 組子寸法ツール
+# 組子寸法ツール v2 fixed
 
-修正内容:
-- 旧: ISR = I-S-R 折れ線
-- 新: ISR = 2 × d(J, LS)
-  - d(J, LS) は点Jから直線LSへの垂線距離
-- 出力PNG/PDFのBC詳細図に、JからLSへの垂線と ISR = 2×d(J,LS) を表示
-- 寸法CSVにも `BC_ISR_Jから直線LSへの垂線距離_mm` と `BC_ISR_2倍寸法_2×d(J,LS)_mm` を追加
+三組手・麻の葉の寸法計算・寸法図作成用 Streamlit アプリです。
 
-起動:
+## 修正内容
+
+- NumPy 2.x / Streamlit Cloudで発生する `np.cross` の2Dベクトルエラーを修正
+- 2D外積 `cross2()` を使用
+- 日本語フォント対策を追加
+- PNG / CSV / PDF出力
+
+## ファイル構成
+
+- `app.py`
+- `kumiko_asanoha_dimension_calculator.py`
+- `requirements.txt`
+- `packages.txt`
+- `README.md`
+
+## Streamlit Cloud
+
+Main file path は `app.py` を指定してください。
+
+## ローカル実行
 
 ```bash
 pip install -r requirements.txt
