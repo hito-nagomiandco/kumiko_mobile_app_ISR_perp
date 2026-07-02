@@ -1,26 +1,15 @@
-# 組子寸法ツール ISR垂線寸法版 preserve-all fixed
+# ISR垂線寸法版 組子寸法ツール
 
-このZIPは、以前の `kumiko_mobile_app_ISR_perp` の内容を基本的にそのまま残し、
-Streamlit Cloud / NumPy 2.x で発生する2D外積エラーだけを修正した版です。
+修正内容:
+- 旧: ISR = I-S-R 折れ線
+- 新: ISR = 2 × d(J, LS)
+  - d(J, LS) は点Jから直線LSへの垂線距離
+- 出力PNG/PDFのBC詳細図に、JからLSへの垂線と ISR = 2×d(J,LS) を表示
+- 寸法CSVにも `BC_ISR_Jから直線LSへの垂線距離_mm` と `BC_ISR_2倍寸法_2×d(J,LS)_mm` を追加
 
-## 修正内容
+起動:
 
-- `np.cross(ab, p - a)` を2D外積 `cross2(ab, p - a)` に置き換え
-- `requirements.txt` を追加
-- `packages.txt` を追加
-
-## 失っていない要素
-
-- 既存の `app.py` のUI構成
-- `build_model()`
-- `make_coords_df()`
-- `make_dims_df()`
-- `plot_sheet()`
-- 葉A詳細図
-- BC連続部材詳細図
-- ISR = 2×d(J,LS) 表示
-- PNG/PDF/座標CSV/寸法CSV出力
-
-## Streamlit Cloud
-
-Main file path は `app.py` を指定してください。
+```bash
+pip install -r requirements.txt
+streamlit run app.py
+```

@@ -105,17 +105,6 @@ def dist(p: np.ndarray, q: np.ndarray) -> float:
     return float(np.linalg.norm(np.asarray(q, dtype=float) - np.asarray(p, dtype=float)))
 
 
-def cross2(a: np.ndarray, b: np.ndarray) -> float:
-    """
-    2次元ベクトル用の外積スカラー。
-    NumPy 2.x / Streamlit Cloud では np.cross() が2Dベクトルでエラーになることがあるため、
-    平面図の距離計算ではこの関数を使う。
-    """
-    a = np.asarray(a, dtype=float)
-    b = np.asarray(b, dtype=float)
-    return float(a[0] * b[1] - a[1] * b[0])
-
-
 def angle_at(p1: np.ndarray, center: np.ndarray, p2: np.ndarray) -> float:
     """
     centerを頂点とする角度 ∠p1-center-p2 [deg]。
@@ -142,7 +131,7 @@ def point_to_line_distance(point: np.ndarray, line_p1: np.ndarray, line_p2: np.n
     denom = float(np.linalg.norm(ab))
     if denom < 1e-12:
         raise ValueError("直線LSを定義する2点が重なっています。")
-    return abs(cross2(ab, p - a)) / denom
+    return abs(float(np.cross(ab, p - a))) / denom
 
 
 def point_projection_on_line(point: np.ndarray, line_p1: np.ndarray, line_p2: np.ndarray) -> np.ndarray:
