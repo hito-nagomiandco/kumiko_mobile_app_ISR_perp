@@ -56,33 +56,46 @@ class KumikoParams:
 def setup_japanese_font() -> None:
     """
     日本語フォント設定。
-    macOSの一部フォントパスには日本語ファイル名が含まれ、
-    環境によっては ascii codec エラーになることがあるため、
-    ここではASCIIファイル名の候補だけを使う。
+    Streamlit Cloudでは packages.txt に fonts-noto-cjk を追加する。
     見つからない場合も描画自体は続行する。
     """
+    import glob
+
     plt.rcParams["axes.unicode_minus"] = False
     plt.rcParams["pdf.fonttype"] = 42
     plt.rcParams["ps.fonttype"] = 42
 
-    candidates = [
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/opentype/noto/NotoSansCJKjp-Regular.otf",
-        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+    candidates = []
+
+    # Streamlit Cloud / Linux
+    for pattern in [
+        "/usr/share/fonts/opentype/noto/*CJK*.ttc",
+        "/usr/share/fonts/opentype/noto/*CJK*.otf",
+        "/usr/share/fonts/truetype/noto/*CJK*.ttc",
+        "/usr/share/fonts/truetype/noto/*CJK*.otf",
+        "/usr/share/fonts/**/NotoSansCJK*.ttc",
+        "/usr/share/fonts/**/NotoSansCJK*.otf",
+    ]:
+        candidates.extend(glob.glob(pattern, recursive=True))
+
+    # macOS / Windows
+    candidates.extend([
         "/Library/Fonts/Arial Unicode.ttf",
         "/System/Library/Fonts/AppleGothic.ttf",
         "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
         "C:/Windows/Fonts/YuGothR.ttc",
         "C:/Windows/Fonts/YuGothM.ttc",
         "C:/Windows/Fonts/msgothic.ttc",
-    ]
+    ])
 
     for font_path in candidates:
         try:
             path = Path(font_path)
             if path.exists():
                 fm.fontManager.addfont(str(path))
-                plt.rcParams["font.family"] = fm.FontProperties(fname=str(path)).get_name()
+                font_name = fm.FontProperties(fname=str(path)).get_name()
+                plt.rcParams["font.family"] = font_name
+                plt.rcParams["font.sans-serif"] = [font_name]
                 return
         except Exception:
             # フォント設定で失敗しても、計算と図の生成は止めない
@@ -103,6 +116,17 @@ def unit(v: np.ndarray) -> np.ndarray:
 
 def dist(p: np.ndarray, q: np.ndarray) -> float:
     return float(np.linalg.norm(np.asarray(q, dtype=float) - np.asarray(p, dtype=float)))
+
+
+def cross2(a: np.ndarray, b: np.ndarray) -> float:
+    """
+    2次元ベクトル用の外積スカラー。
+    Streamlit Cloud / NumPy 2.x では np.cross が2D入力でエラーになることがあるため、
+    平面図の計算ではこの関数を使う。
+    """
+    a = np.asarray(a, dtype=float)
+    b = np.asarray(b, dtype=float)
+    return float(a[0] * b[1] - a[1] * b[0])
 
 
 def angle_at(p1: np.ndarray, center: np.ndarray, p2: np.ndarray) -> float:
@@ -131,7 +155,7 @@ def point_to_line_distance(point: np.ndarray, line_p1: np.ndarray, line_p2: np.n
     denom = float(np.linalg.norm(ab))
     if denom < 1e-12:
         raise ValueError("直線LSを定義する2点が重なっています。")
-    return abs(float(np.cross(ab, p - a))) / denom
+    return abs(cross2(ab, p - a)) / denom
 
 
 def point_projection_on_line(point: np.ndarray, line_p1: np.ndarray, line_p2: np.ndarray) -> np.ndarray:

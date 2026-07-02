@@ -1,13 +1,39 @@
-# ISR垂線寸法版 組子寸法ツール
+# 組子寸法ツール ISR垂線寸法版 fixed
 
-修正内容:
-- 旧: ISR = I-S-R 折れ線
-- 新: ISR = 2 × d(J, LS)
-  - d(J, LS) は点Jから直線LSへの垂線距離
-- 出力PNG/PDFのBC詳細図に、JからLSへの垂線と ISR = 2×d(J,LS) を表示
-- 寸法CSVにも `BC_ISR_Jから直線LSへの垂線距離_mm` と `BC_ISR_2倍寸法_2×d(J,LS)_mm` を追加
+これは `kumiko_mobile_app_ISR_perp` を正本として、元の要素を省略せずに Streamlit Cloud / NumPy 2.x 対応だけを加えた版です。
 
-起動:
+## 維持している定義
+
+```text
+ISR = 2 × d(J, LS)
+```
+
+つまり、点Jから直線LSへ下ろした垂線距離の2倍です。
+
+`E=59, 親桟=4, 葉桟=4, clearance=0.10` の場合、代表値は以下です。
+
+```text
+d(J, LS) = 32.91 mm
+ISR = 65.82 mm
+```
+
+## 修正点
+
+- `np.cross(...)` を2次元ベクトルに対して使わないように修正
+- 2D外積 `cross2(a, b)` を追加
+- `point_to_line_distance()` 内の外積を `cross2()` に置換
+- Streamlit Cloud用に `requirements.txt` と `packages.txt` を追加
+- 日本語フォント探索を強化
+
+## ファイル構成
+
+- `app.py`
+- `kumiko_asanoha_dimension_calculator.py`
+- `requirements.txt`
+- `packages.txt`
+- `README.md`
+
+## ローカル実行
 
 ```bash
 pip install -r requirements.txt
