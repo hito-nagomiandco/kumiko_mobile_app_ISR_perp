@@ -1,395 +1,135 @@
-from __future__ import annotations
+# app.py
+# -*- coding: utf-8 -*-
 
-import io
-import math
-from dataclasses import dataclass
-from typing import List, Tuple
+from pathlib import Path
+import tempfile
 
-import matplotlib.pyplot as plt
-from matplotlib.patches import Polygon
-import numpy as np
-import pandas as pd
 import streamlit as st
 
+from shoji_panel_calculator import ShojiParams, calculate_shoji, save_outputs
 
-Point = np.ndarray
 
+st.set_page_config(page_title="障子ピッチツール", page_icon="▦", layout="wide")
 
-@dataclass
-class LPart:
-    name: str
-    axis_start: Point   # center point / 剣先
-    axis_end: Point     # outside end on effective triangle vertex
-    width: float
-    thickness: float
-    clearance: float
-
-
-# ============================================================
-# 2D geometry utilities
-# ============================================================
-
-def unit(v: Point) -> Point:
-    n = float(np.linalg.norm(v))
-    if n == 0.0:
-        return np.array([0.0, 0.0])
-    return v / n
-
-
-def cross2(a: Point, b: Point) -> float:
-    """2D vector cross product scalar. Avoid np.linalg.cross for 2D vectors."""
-    return float(a[0] * b[1] - a[1] * b[0])
-
-
-def dot2(a: Point, b: Point) -> float:
-    return float(a[0] * b[0] + a[1] * b[1])
-
-
-def angle_deg(v: Point) -> float:
-    return math.degrees(math.atan2(float(v[1]), float(v[0])))
-
-
-def rotate90(v: Point) -> Point:
-    return np.array([-v[1], v[0]], dtype=float)
-
-
-def equilateral_vertices(side: float) -> List[Point]:
-    """Equilateral triangle, centroid at origin, one vertex up."""
-    h = math.sqrt(3.0) / 2.0 * side
-    return [
-        np.array([0.0, 2.0 * h / 3.0], dtype=float),
-        np.array([-side / 2.0, -h / 3.0], dtype=float),
-        np.array([side / 2.0, -h / 3.0], dtype=float),
-    ]
-
-
-def bar_polygon_flat(p0: Point, p1: Point, width: float) -> np.ndarray:
-    """Constant-width parent bar polygon around centerline p0-p1."""
-    u = unit(p1 - p0)
-    n = rotate90(u)
-    hw = width / 2.0
-    return np.array([p0 + n * hw, p1 + n * hw, p1 - n * hw, p0 - n * hw])
-
-
-def pointed_l_polygon(part: LPart, kenzaki_angle_deg: float = 60.0) -> np.ndarray:
-    """L part polygon with a 60-degree pointed inner end.
-
-    The point is at axis_start.
-    The part reaches full width at shoulder distance:
-        d = (w/2) / tan(kenzaki_angle/2)
-
-    For 60 degrees, d = w * sqrt(3) / 2.
-    """
-    p0 = part.axis_start
-    p1 = part.axis_end
-    w = part.width
-
-    u = unit(p1 - p0)
-    n = rotate90(u)
-    hw = w / 2.0
-
-    half_angle = math.radians(kenzaki_angle_deg / 2.0)
-    shoulder = hw / math.tan(half_angle)
-
-    # Leave a small clearance at the outside end, but do not move the tip.
-    total_len = float(np.linalg.norm(p1 - p0))
-    outer = p1 - u * part.clearance
-
-    # If the piece is too short, keep a tiny shoulder to avoid invalid polygon.
-    shoulder = min(shoulder, max(total_len * 0.45, 0.001))
-    s = p0 + u * shoulder
-
-    return np.array([
-        p0,
-        s + n * hw,
-        outer + n * hw,
-        outer - n * hw,
-        s - n * hw,
-    ])
-
-
-def polygon_valid(poly: np.ndarray) -> bool:
-    """Simple validity check: area must be positive and finite."""
-    if poly.shape[0] < 3:
-        return False
-    area = 0.0
-    for i in range(len(poly)):
-        a = poly[i]
-        b = poly[(i + 1) % len(poly)]
-        area += cross2(a, b)
-    return math.isfinite(area) and abs(area) > 1e-9
-
-
-# ============================================================
-# Kumiko model
-# ============================================================
-
-def effective_to_center_side(effective_side: float, parent_width: float) -> float:
-    """Convert inner/effective triangle side E to parent centerline side S.
-
-    When three parent bars with width W surround an equilateral triangular opening,
-    the centerline triangle is larger by sqrt(3) * W.
-    """
-    return effective_side + math.sqrt(3.0) * parent_width
-
-
-def center_to_effective_side(center_side: float, parent_width: float) -> float:
-    return center_side - math.sqrt(3.0) * parent_width
-
-
-def build_model(
-    input_value: float,
-    input_mode: str,
-    parent_width: float,
-    leaf_width: float,
-    thickness: float,
-    clearance: float,
-) -> Tuple[float, float, List[Point], List[Point], List[LPart]]:
-    """Build L-only asanoha / mitsukude prototype.
-
-    input_mode:
-      - "有効三角形 E": input_value is the clear/effective triangle side.
-      - "三組手中心線 S": input_value is the parent centerline triangle side.
-    """
-    if input_mode == "有効三角形 E":
-        E = input_value
-        S = effective_to_center_side(E, parent_width)
-    else:
-        S = input_value
-        E = center_to_effective_side(S, parent_width)
-
-    if E <= 0:
-        raise ValueError("有効三角形Eが0以下です。三角形が成立しません。")
-    if leaf_width <= 0 or parent_width <= 0:
-        raise ValueError("桟太さは0より大きい値にしてください。")
-
-    # A practical warning, not a hard mathematical failure.
-    # If E is very small relative to the leaf width, parts overlap heavily.
-    min_required = leaf_width * math.sqrt(3.0)
-    if E <= min_required:
-        raise ValueError(
-            f"有効三角形Eが小さすぎます。E={E:.3f}mm, 葉桟={leaf_width:.3f}mm。"
-            f"目安として E > {min_required:.3f}mm 程度にしてください。"
-        )
-
-    outer = equilateral_vertices(S)  # parent centerline triangle
-    inner = equilateral_vertices(E)  # effective/clear triangle
-
-    c = np.array([0.0, 0.0], dtype=float)
-
-    parts: List[LPart] = []
-    for i, v in enumerate(inner):
-        parts.append(
-            LPart(
-                name=f"L{i+1}",
-                axis_start=c,
-                axis_end=v,
-                width=leaf_width,
-                thickness=thickness,
-                clearance=clearance,
-            )
-        )
-
-    return S, E, outer, inner, parts
-
-
-def make_parts_table(parts: List[LPart]) -> pd.DataFrame:
-    rows = []
-    for p in parts:
-        axis_len = float(np.linalg.norm(p.axis_end - p.axis_start))
-        kenzaki_shoulder = (p.width / 2.0) / math.tan(math.radians(30.0))
-        cut_len = max(axis_len - p.clearance, 0.0)
-
-        rows.append({
-            "部材名": p.name,
-            "本数": 1,
-            "幅_mm": round(p.width, 3),
-            "厚み_mm": round(p.thickness, 3),
-            "中心線長さ_mm": round(axis_len, 3),
-            "外端クリアランス_mm": round(p.clearance, 3),
-            "実用切断長さ_中心先端から外端_mm": round(cut_len, 3),
-            "中心部納まり": "剣先納め",
-            "中心部_剣先角": "60°",
-            "中心部_片側カット角": "30°（長手方向基準） / 60°（直角基準）",
-            "剣先肩位置_mm": round(kenzaki_shoulder, 3),
-            "外端角度": "現段階では親桟側に突付け。仕口ルール追加予定",
-        })
-
-    df = pd.DataFrame(rows)
-
-    # L1-L3 are identical in length in this symmetric model.
-    grouped = (
-        df.groupby([
-            "幅_mm",
-            "厚み_mm",
-            "実用切断長さ_中心先端から外端_mm",
-            "中心部納まり",
-            "中心部_剣先角",
-            "中心部_片側カット角",
-            "外端角度",
-        ], dropna=False)
-        .size()
-        .reset_index(name="本数")
-    )
-    return df, grouped
-
-
-def draw_model(
-    S: float,
-    E: float,
-    outer: List[Point],
-    inner: List[Point],
-    parts: List[LPart],
-    parent_width: float,
-    show_centerlines: bool,
-    show_labels: bool,
-):
-    fig, ax = plt.subplots(figsize=(8, 8))
-
-    # Parent bars
-    parent_edges = [(outer[0], outer[1]), (outer[1], outer[2]), (outer[2], outer[0])]
-    for a, b in parent_edges:
-        poly = bar_polygon_flat(a, b, parent_width)
-        ax.add_patch(Polygon(poly, closed=True, alpha=0.32, edgecolor="black", facecolor="lightgray", linewidth=1.2))
-        if show_centerlines:
-            ax.plot([a[0], b[0]], [a[1], b[1]], "--", linewidth=0.8)
-
-    # Effective triangle
-    ix = [p[0] for p in inner] + [inner[0][0]]
-    iy = [p[1] for p in inner] + [inner[0][1]]
-    ax.plot(ix, iy, ":", linewidth=1.0)
-
-    # L parts
-    for p in parts:
-        poly = pointed_l_polygon(p, 60.0)
-        if not polygon_valid(poly):
-            raise ValueError(f"{p.name}のポリゴン生成に失敗しました。")
-
-        ax.add_patch(Polygon(poly, closed=True, alpha=0.72, edgecolor="black", facecolor="white", linewidth=1.4))
-
-        if show_centerlines:
-            ax.plot(
-                [p.axis_start[0], p.axis_end[0]],
-                [p.axis_start[1], p.axis_end[1]],
-                linewidth=0.8,
-                alpha=0.8,
-            )
-
-        if show_labels:
-            mid = p.axis_start + (p.axis_end - p.axis_start) * 0.55
-            ax.text(mid[0], mid[1], p.name, ha="center", va="center", fontsize=12)
-
-    # Center mark and angle text
-    ax.scatter([0], [0], s=18)
-    ax.text(0, -E * 0.055, "中心：剣先角60°", ha="center", va="top", fontsize=10)
-
-    # Dimension notes
-    bottom_mid = (outer[1] + outer[2]) / 2.0
-    ax.text(bottom_mid[0], bottom_mid[1] - S * 0.10, f"有効三角形 E = {E:.2f} mm", ha="center", fontsize=10)
-    ax.text(bottom_mid[0], bottom_mid[1] - S * 0.16, f"三組手中心線 S = {S:.2f} mm", ha="center", fontsize=10)
-
-    all_pts = np.vstack(outer + inner + [np.array([0.0, 0.0])] + [p.axis_end for p in parts])
-    margin = max(S, parent_width, E) * 0.25
-    ax.set_xlim(float(all_pts[:, 0].min() - margin), float(all_pts[:, 0].max() + margin))
-    ax.set_ylim(float(all_pts[:, 1].min() - margin), float(all_pts[:, 1].max() + margin))
-    ax.set_aspect("equal", adjustable="box")
-    ax.axis("off")
-    return fig
-
-
-# ============================================================
-# Streamlit UI
-# ============================================================
-
-st.set_page_config(page_title="三組手 麻の葉 L部材 剣先納め", layout="wide")
-
-st.title("三組手 麻の葉：L部材のみ / 中心剣先納め")
-st.caption("M部材を使わず、中心に向かう3本のL部材だけを剣先納めで可視化します。")
-
-PRESETS = {
-    "E=59 / 親桟4 / 葉桟4": dict(input_mode="有効三角形 E", input_value=59.0, parent_width=4.0, leaf_width=4.0, thickness=4.0, clearance=0.10),
-    "E=120 / 親桟6 / 葉桟4": dict(input_mode="有効三角形 E", input_value=120.0, parent_width=6.0, leaf_width=4.0, thickness=3.0, clearance=0.10),
-}
+st.title("障子ピッチツール")
+st.caption("密度変化のある障子割付と、施工用の片面座標を作成します。")
 
 with st.sidebar:
-    st.header("プリセット")
-    preset_name = st.selectbox("プリセット", list(PRESETS.keys()))
-    preset = PRESETS[preset_name]
-
-    st.header("入力")
-    input_mode = st.radio("入力基準", ["有効三角形 E", "三組手中心線 S"], index=0 if preset["input_mode"] == "有効三角形 E" else 1)
-    input_value = st.number_input("三角形の一辺 [mm]", min_value=1.0, value=float(preset["input_value"]), step=1.0)
-    parent_width = st.number_input("親桟太さ [mm]", min_value=0.1, value=float(preset["parent_width"]), step=0.1)
-    leaf_width = st.number_input("葉桟太さ [mm]", min_value=0.1, value=float(preset["leaf_width"]), step=0.1)
-    thickness = st.number_input("部材厚み [mm]", min_value=0.1, value=float(preset["thickness"]), step=0.1)
-    clearance = st.number_input("外端クリアランス [mm]", min_value=0.0, value=float(preset["clearance"]), step=0.05)
+    st.header("基本寸法")
+    panel_width = st.number_input("有効幅 [mm]", min_value=100.0, max_value=10000.0, value=1000.0, step=10.0)
+    panel_height = st.number_input("パネル高さ [mm]", min_value=100.0, max_value=10000.0, value=600.0, step=10.0)
+    bar_width = st.number_input("組子幅・見付 [mm]", min_value=1.0, max_value=100.0, value=5.0, step=0.5)
+    bar_thickness = st.number_input("組子厚み [mm]", min_value=1.0, max_value=100.0, value=12.0, step=0.5)
+    bar_count = st.number_input("組子本数", min_value=1, max_value=200, value=20, step=1)
 
     st.divider()
-    show_centerlines = st.checkbox("中心線を表示", value=True)
-    show_labels = st.checkbox("部材番号を表示", value=True)
+    st.header("密度変化")
+    max_gap = st.number_input("最大隙間・疎側 [mm]", min_value=1.0, max_value=1000.0, value=150.0, step=1.0)
+    min_gap = st.number_input("最小隙間・密側 [mm]", min_value=0.5, max_value=500.0, value=12.0, step=0.5)
+
+    curve_type_label = st.selectbox(
+        "曲線タイプ",
+        options=["余弦 cosine", "べき乗 power", "指数 exponential", "直線 linear"],
+        index=0,
+    )
+    curve_type = {
+        "余弦 cosine": "cosine",
+        "べき乗 power": "power",
+        "指数 exponential": "exponential",
+        "直線 linear": "linear",
+    }[curve_type_label]
+
+    direction_label = st.selectbox("密になる方向", options=["右に向かって密", "左に向かって密"], index=0)
+    direction = "right_dense" if direction_label == "右に向かって密" else "left_dense"
+
+    change_position = st.slider(
+        "変化位置",
+        min_value=0.05,
+        max_value=0.95,
+        value=0.35,
+        step=0.01,
+        help="0.5が中央。0.35なら疎側寄りに変化が出ます。",
+    )
+    sparse_motion = st.slider(
+        "疎側の動き",
+        min_value=0.0,
+        max_value=100.0,
+        value=70.0,
+        step=1.0,
+        help="値を大きくすると、疎側から早めに変化が出ます。",
+    )
+
+    st.divider()
+    st.header("加工設定")
+    round_unit = st.selectbox("丸め単位 [mm]", options=[0.1, 0.5, 1.0, 2.0, 5.0], index=1)
+    generate = st.button("計算する", type="primary")
+
+if not generate:
+    st.info("左のパラメータを設定して「計算する」を押してください。")
+    st.stop()
 
 try:
-    S, E, outer, inner, parts = build_model(
-        input_value=input_value,
-        input_mode=input_mode,
-        parent_width=parent_width,
-        leaf_width=leaf_width,
-        thickness=thickness,
-        clearance=clearance,
+    params = ShojiParams(
+        panel_width=panel_width,
+        panel_height=panel_height,
+        bar_width=bar_width,
+        bar_thickness=bar_thickness,
+        bar_count=int(bar_count),
+        max_gap=max_gap,
+        min_gap=min_gap,
+        change_position=change_position,
+        sparse_motion=sparse_motion,
+        curve_type=curve_type,
+        direction=direction,
+        round_unit=float(round_unit),
     )
-
-    detail_df, grouped_df = make_parts_table(parts)
-
-    col1, col2 = st.columns([1.15, 1.0])
-
-    with col1:
-        st.subheader("寸法図")
-        fig = draw_model(S, E, outer, inner, parts, parent_width, show_centerlines, show_labels)
-        st.pyplot(fig)
-
-        png_buf = io.BytesIO()
-        fig.savefig(png_buf, format="png", dpi=300, bbox_inches="tight")
-        st.download_button(
-            "PNGをダウンロード",
-            png_buf.getvalue(),
-            file_name="kumiko_L_only_kenzaki.png",
-            mime="image/png",
-        )
-
-    with col2:
-        st.subheader("換算寸法")
-        st.write({
-            "有効三角形 E [mm]": round(E, 3),
-            "三組手中心線 S [mm]": round(S, 3),
-            "親桟太さ [mm]": round(parent_width, 3),
-            "葉桟太さ [mm]": round(leaf_width, 3),
-            "中心部 剣先角": "60°",
-            "中心部 片側カット": "30°（長手方向基準） / 60°（直角基準）",
-        })
-
-        st.subheader("材料取り表")
-        st.dataframe(grouped_df, use_container_width=True)
-        st.download_button(
-            "材料取りCSVをダウンロード",
-            grouped_df.to_csv(index=False).encode("utf-8-sig"),
-            file_name="kumiko_L_only_cutlist.csv",
-            mime="text/csv",
-        )
-
-    st.subheader("L部材の詳細")
-    st.dataframe(detail_df, use_container_width=True)
-    st.download_button(
-        "詳細CSVをダウンロード",
-        detail_df.to_csv(index=False).encode("utf-8-sig"),
-        file_name="kumiko_L_only_detail.csv",
-        mime="text/csv",
-    )
-
-    st.info(
-        "中心側端部は、剣先の先端角として60°です。"
-        "加工表では、同じ形状を『長手方向基準で片側30°』または『直角基準で60°』と表すことがあります。"
-    )
-
+    result = calculate_shoji(params)
 except Exception as e:
-    st.error("この寸法条件では形状が成立しません。")
-    st.warning(str(e))
+    st.error(f"計算エラー: {e}")
+    st.stop()
+
+with tempfile.TemporaryDirectory() as tmpdir:
+    paths = save_outputs(result, tmpdir)
+    summary = result.summary.iloc[0]
+
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("実際の最大隙間", f"{summary['actual_max_gap']:.1f} mm")
+    with col2:
+        st.metric("実際の最小隙間", f"{summary['actual_min_gap']:.1f} mm")
+    with col3:
+        st.metric("隙間合計", f"{summary['actual_gap_total']:.1f} mm")
+    with col4:
+        st.metric("全体幅", f"{summary['actual_total_width']:.1f} mm")
+
+    st.subheader("割付図")
+    st.image(str(paths["png"]), use_container_width=True)
+
+    st.subheader("寸法表")
+    tab1, tab2, tab3 = st.tabs(["施工用 桟座標", "隙間寸法", "概要"])
+
+    with tab1:
+        st.caption("芯芯ではなく、桟の片面座標を出しています。左端0点・右端0点の両方から確認できます。")
+        st.dataframe(result.bars, use_container_width=True)
+
+    with tab2:
+        st.dataframe(result.gaps, use_container_width=True)
+
+    with tab3:
+        st.dataframe(result.summary, use_container_width=True)
+
+    st.subheader("ダウンロード")
+    col_a, col_b, col_c, col_d = st.columns(4)
+
+    with col_a:
+        with open(paths["png"], "rb") as f:
+            st.download_button("PNG", f, file_name=Path(paths["png"]).name, mime="image/png")
+    with col_b:
+        with open(paths["bar_coordinates_csv"], "rb") as f:
+            st.download_button("施工用 桟座標CSV", f, file_name=Path(paths["bar_coordinates_csv"]).name, mime="text/csv")
+    with col_c:
+        with open(paths["gaps_csv"], "rb") as f:
+            st.download_button("隙間寸法CSV", f, file_name=Path(paths["gaps_csv"]).name, mime="text/csv")
+    with col_d:
+        with open(paths["summary_csv"], "rb") as f:
+            st.download_button("概要CSV", f, file_name=Path(paths["summary_csv"]).name, mime="text/csv")

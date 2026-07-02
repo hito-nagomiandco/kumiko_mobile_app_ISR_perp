@@ -1,0 +1,2 @@
+﻿panel_width,panel_height,bar_width,bar_thickness,bar_count,gap_count,target_gap_total,actual_gap_total,actual_total_width,input_max_gap,input_min_gap,actual_max_gap,actual_min_gap,change_position,sparse_motion,curve_type,direction,round_unit
+1000,600,5,12,20,21,900,900.0,1000.0,150,12,154.0,12.5,0.35,70,cosine,right_dense,0.5
