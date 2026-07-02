@@ -1,29 +1,26 @@
-# 組子寸法ツール v2 fixed
+# 組子寸法ツール ISR垂線寸法版 preserve-all fixed
 
-三組手・麻の葉の寸法計算・寸法図作成用 Streamlit アプリです。
+このZIPは、以前の `kumiko_mobile_app_ISR_perp` の内容を基本的にそのまま残し、
+Streamlit Cloud / NumPy 2.x で発生する2D外積エラーだけを修正した版です。
 
 ## 修正内容
 
-- NumPy 2.x / Streamlit Cloudで発生する `np.cross` の2Dベクトルエラーを修正
-- 2D外積 `cross2()` を使用
-- 日本語フォント対策を追加
-- PNG / CSV / PDF出力
+- `np.cross(ab, p - a)` を2D外積 `cross2(ab, p - a)` に置き換え
+- `requirements.txt` を追加
+- `packages.txt` を追加
 
-## ファイル構成
+## 失っていない要素
 
-- `app.py`
-- `kumiko_asanoha_dimension_calculator.py`
-- `requirements.txt`
-- `packages.txt`
-- `README.md`
+- 既存の `app.py` のUI構成
+- `build_model()`
+- `make_coords_df()`
+- `make_dims_df()`
+- `plot_sheet()`
+- 葉A詳細図
+- BC連続部材詳細図
+- ISR = 2×d(J,LS) 表示
+- PNG/PDF/座標CSV/寸法CSV出力
 
 ## Streamlit Cloud
 
 Main file path は `app.py` を指定してください。
-
-## ローカル実行
-
-```bash
-pip install -r requirements.txt
-streamlit run app.py
-```
